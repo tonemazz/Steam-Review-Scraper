@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Steam Review Scraper</title>
+
+  <!-- ======  YOUR ORIGINAL STYLES  ====== -->
+  <style>
+    #spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 3px solid #ccc;
+  border-top: 3px solid #00f;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  vertical-align: middle;
+  margin-left: 10px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+
+    body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#121212;color:#fff}
+    #main-container{padding:20px}
+    #search-bar{display:flex;gap:10px;margin-bottom:10px}
+    #search-input{flex:1;padding:8px;border-radius:4px;border:1px solid #444;background:#1e1e1e;color:#fff}
+    #search-button{padding:8px 16px;border:none;border-radius:4px;background:#2a2a2a;color:#fff;cursor:pointer}
+    #status-label{display:block;text-align:center;margin-bottom:10px;height:20px}
+    #games-grid{display:grid;grid-template-columns:repeat(auto-fill,170px);gap:20px;justify-content:center;background:#1e1e1e;padding:20px;border-radius:8px}
+    .game-tile{width:170px;height:275px;position:relative;transition:transform .2s,box-shadow .2s}
+    .game-tile:hover{transform:scale(1.05);box-shadow:0 0 10px rgba(255,255,255,.5)}
+    .game-container{width:150px;height:255px;margin:auto;display:flex;flex-direction:column;align-items:center}
+    .game-image{width:150px;height:225px;object-fit:cover;border:2px solid #333;border-radius:5px;background:#2a2a2a}
+    .game-name{width:150px;height:40px;text-align:center;font-size:9pt;font-weight:bold;margin-top:5px;word-wrap:break-word}
+    #progress-container{margin-top:10px;text-align:center}
+    #progress-bar{width:100%;height:20px}
+    #context-menu{position:absolute;background:#2a2a2a;border:1px solid #333;border-radius:5px;display:none;z-index:1000}
+    #context-menu .menu-item{padding:8px 12px;cursor:pointer;color:#fff}
+    #context-menu .menu-item:hover{background:#333}
+    dialog{color:#fff;background:#1e1e1e;border:none;border-radius:8px;padding:20px}
+    dialog::backdrop{background:rgba(0,0,0,.5)}
+    dialog button{margin:10px 5px 0 0;padding:6px 12px;border:none;border-radius:4px;background:#2a2a2a;color:#fff;cursor:pointer}
+    dialog input[type="range"],dialog input[type="number"]{width:100%;margin-top:10px}
+  </style>
+</head>
+<body>
+  <div id="main-container">
+    <div id="search-bar">
+      <input id="search-input" placeholder="Search Steam or leave blank for top games">
+      <button id="search-button">Search</button>
+    </div>
+    <label id="status-label"></label>
+    <div id="games-grid"></div>
+    <div id="progress-container">
+      <progress id="progress-bar" value="0" max="100" hidden></progress>
+      <div id="progress-status"></div>
+    </div>
+  </div>
+
+  <div id="context-menu">
+    <div class="menu-item" id="menu-scrape">Scrape Reviews</div>
+    <div class="menu-item" id="menu-store">Go to Store Page</div>
+  </div>
+
+  <dialog id="count-dialog">
+    <form method="dialog">
+      <p>Select number of reviews to scrape: <span id="selected-count">500</span></p>
+      <!-- max is set dynamically in JS -->
+      <input type="range" id="count-slider" min="1" max="1000" value="500">
+      <input type="number" id="count-input" min="1" max="1000" value="500">
+      <menu>
+        <button id="cancel-button" type="reset">Cancel</button>
+        <button id="ok-button" type="submit">OK</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+    /* -----------------------------------------------------------
+       0.  SMALL UTILS
+    ----------------------------------------------------------- */
+    const imgUrl = id => `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/library_600x900_2x.jpg`;
+    const sleep  = ms => new Promise(r => setTimeout(r, ms));
+
+    async function getTotalReviews(appId) {
+      const api = `https://store.steampowered.com/appreviews/${appId}?json=1&language=all&purchase_type=all&filter=all&num_per_page=0`;
+      try {
+        const res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(api));
+        const { query_summary } = await res.json();
+        return query_summary.total_reviews || 1000;
+      } catch {
+        return 1000; // fallback
+      }
+    }
+
+    /* -----------------------------------------------------------
+       1.  DOM HANDLES
+    ----------------------------------------------------------- */
+    const gamesGrid      = document.getElementById('games-grid');
+    const searchInput    = document.getElementById('search-input');
+    const searchButton   = document.getElementById('search-button');
+    const statusLabel    = document.getElementById('status-label');
+    const progressBar    = document.getElementById('progress-bar');
+    const progressStatus = document.getElementById('progress-status');
+    const contextMenu    = document.getElementById('context-menu');
+    const countDialog    = document.getElementById('count-dialog');
+    const countSlider    = document.getElementById('count-slider');
+    const countInput     = document.getElementById('count-input');
+    const selectedCount  = document.getElementById('selected-count');
+    const menuScrape     = document.getElementById('menu-scrape');
+    const menuStore      = document.getElementById('menu-store');
+
+    /* -----------------------------------------------------------
+       2.  GLOBAL STATE
+    ----------------------------------------------------------- */
+    let displayedGames = [];
+    let selectedGame   = null;
+
+    /* -----------------------------------------------------------
+       3.  TILE RENDERER
+    ----------------------------------------------------------- */
+    function showGames(list) {
+      gamesGrid.innerHTML = '';
+      if (!list.length) {
+        gamesGrid.innerHTML = '<p style="color:#888;">No games to display.</p>';
+        return;
+      }
+      list.forEach(g => {
+        const tile      = document.createElement('div');
+        tile.className  = 'game-tile';
+        tile.dataset.id = g.app_id;
+        tile.dataset.name = g.name;
+
+        const wrap   = document.createElement('div');
+        wrap.className = 'game-container';
+
+        const img   = document.createElement('img');
+        img.className = 'game-image';
+        img.src = g.image;
+        img.alt = g.name;
+
+        const label = document.createElement('div');
+        label.className = 'game-name';
+        label.textContent = g.name;
+
+        wrap.append(img, label);
+        tile.appendChild(wrap);
+        gamesGrid.appendChild(tile);
+      });
+    }
+
+    /* -----------------------------------------------------------
+       4.  LOAD TOP GAMES  (Steam Spy ≈10 kB vs 9 MB applist)
+    ----------------------------------------------------------- */
+    async function loadInitialGames() {
+      statusLabel.textContent = 'Loading top games…';
+      try {
+        const url  = 'https://api.allorigins.win/raw?url=' +
+                     encodeURIComponent('https://steamspy.com/api.php?request=top100in2weeks');
+        const res  = await fetch(url);
+        const data = await res.json();                      // object keyed by appid
+        const top  = Object.values(data).slice(0, 50);      // best 50
+        displayedGames = top.map(g => ({
+          app_id : g.appid,
+          name   : g.name,
+          image  : imgUrl(g.appid)
+        }));
+        showGames(displayedGames);
+        statusLabel.textContent = '';
+      } catch (err) {
+        console.error(err);
+        statusLabel.textContent = 'Failed to load top games.';
+      }
+    }
+
+    /* -----------------------------------------------------------
+       5.  SEARCH (small JSON, much faster & CORS-friendly)
+    ----------------------------------------------------------- */
+    async function searchSteam(term) {
+      statusLabel.textContent = `Searching “${term}”…`;
+      try {
+        const url = 'https://api.allorigins.win/raw?url=' +
+                    encodeURIComponent(`https://store.steampowered.com/api/storesearch?term=${encodeURIComponent(term)}&cc=us&l=en`);
+        const res  = await fetch(url);
+        const data = await res.json();                       // { items: [...] }
+        const results = (data.items || []).slice(0, 50).map(i => ({
+          app_id : i.id,
+          name   : i.name,
+          image  : imgUrl(i.id)
+        }));
+        displayedGames = results;
+        showGames(results);
+        statusLabel.textContent = `Found ${results.length} result(s).`;
+      } catch (err) {
+        console.error(err);
+        statusLabel.textContent = 'Search failed – try again.';
+      } finally {
+        setTimeout(() => { statusLabel.textContent = ''; }, 3000);
+      }
+    }
+
+    /* -----------------------------------------------------------
+       6.  CONTEXT MENU (left OR right click)
+    ----------------------------------------------------------- */
+    function openContextMenu(evt) {
+      const tile = evt.target.closest('.game-tile');
+      if (!tile) return;
+      selectedGame = { app_id: tile.dataset.id, name: tile.dataset.name };
+      contextMenu.style.display = 'block';
+      contextMenu.style.left = `${evt.pageX}px`;
+      contextMenu.style.top  = `${evt.pageY}px`;
+    }
+
+    // hide when clicking elsewhere
+    document.addEventListener('click', e => {
+      if (!contextMenu.contains(e.target)) contextMenu.style.display = 'none';
+    });
+
+    // SHOW on right-click
+    gamesGrid.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      openContextMenu(e);
+      e.stopPropagation();
+    });
+    // SHOW on left-click
+    gamesGrid.addEventListener('click', e => {
+      e.preventDefault();
+      openContextMenu(e);
+      e.stopPropagation();
+    });
+
+    /* -----------------------------------------------------------
+       7.  DIALOG & SLIDER BINDINGS
+    ----------------------------------------------------------- */
+    menuScrape.onclick = async () => {
+      contextMenu.style.display = 'none';
+      const total = await getTotalReviews(selectedGame.app_id);
+      // update slider & number max
+      countSlider.max = countInput.max = total;
+
+      // sensible default value (cap at 500 to avoid rate-limit surprise)
+      const def = Math.min(total, 500);
+      countSlider.value = countInput.value = selectedCount.textContent = def;
+
+      countDialog.showModal();
+    };
+
+    menuStore.onclick = () => {
+      window.open(`https://store.steampowered.com/app/${selectedGame.app_id}`, '_blank');
+      contextMenu.style.display = 'none';
+    };
+
+    /* slider ↔ number sync */
+    countSlider.oninput = () => {
+      selectedCount.textContent = countInput.value = countSlider.value;
+    };
+    countInput.onchange = () => {
+      const max = parseInt(countSlider.max, 10);
+      let v = Math.max(1, Math.min(max, parseInt(countInput.value) || 1));
+      countSlider.value = countInput.value = selectedCount.textContent = v;
+    };
+
+    /* -----------------------------------------------------------
+       8.  SCRAPER (unchanged)
+    ----------------------------------------------------------- */
+    async function startScraping(app_id, name, num) {
+    progressBar.hidden = false;
+    progressBar.value = 0;
+
+    // Show status + spinner
+    statusLabel.innerHTML = `Scraping ${num} review(s) for “${name}”… <span id="spinner"></span>`;
+
+      const reviews = await scrapeReviews(app_id, num);
+
+      progressBar.hidden = true;
+      progressStatus.textContent = '';
+      statusLabel.textContent = '';  // Clear loading message
+
+
+      if (!reviews.length) {
+        alert('No reviews returned – Steam might be rate-limiting. Try again later.');
+        return;
+      }
+      generateExcelFile(reviews, app_id);
+      alert('Scraping complete! Excel file downloaded.');
+    }
+
+    async function scrapeReviews(app_id, goal) {
+      let cursor = '*', scraped = 0, reviews = [];
+      while (scraped < goal) {
+        const url = `https://store.steampowered.com/appreviews/${app_id}?json=1&filter=all&language=english&cursor=${encodeURIComponent(cursor)}&num_per_page=100`;
+        try {
+          const res   = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(url));
+          const data  = await res.json();
+          if (!data.success || !Array.isArray(data.reviews)) break;
+
+          for (const r of data.reviews) {
+            if (scraped >= goal) break;
+            const minutes = r.author?.playtime_forever ?? 0;
+            reviews.push({
+            review_text : r.review,
+            recommended : r.voted_up,
+            hours       : Math.round((minutes / 60) * 10) / 10,  // Convert to hours with 1 decimal
+            timestamp   : r.timestamp_created
+});
+
+            scraped++;
+          }
+          progressBar.value = Math.floor((scraped / goal) * 100);
+          progressStatus.textContent = `Scraped ${scraped}/${goal}…`;
+          cursor = data.cursor;
+          await sleep(1000);                    // polite delay
+        } catch (err) {
+          console.error(err);
+          break;
+        }
+      }
+      return reviews;
+    }
+
+    function generateExcelFile(reviews, app_id) {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(
+        reviews.map(r => ({
+          Review      : r.review_text,
+          Recommended : r.recommended,
+          HoursPlayed : r.hours,
+          Date        : new Date(r.timestamp * 1000).toISOString()
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, ws, 'Reviews');
+      XLSX.writeFile(wb, `steam_reviews_${app_id}.xlsx`);
+    }
+
+    /* -----------------------------------------------------------
+       9.  EVENT HOOKS
+    ----------------------------------------------------------- */
+    searchInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        searchButton.click();
+      }
+    });
+    searchButton.onclick = () => {
+      const term = searchInput.value.trim();
+      term ? searchSteam(term) : loadInitialGames();
+    };
+
+    document.getElementById('cancel-button').onclick = () => countDialog.close();
+    document.getElementById('ok-button').onclick = () => {
+      const num = parseInt(countSlider.value, 10);
+      countDialog.close();
+      startScraping(selectedGame.app_id, selectedGame.name, num);
+    };
+
+    /* -----------------------------------------------------------
+       10. FIRST LOAD
+    ----------------------------------------------------------- */
+    window.onload = loadInitialGames;
+  </script>
+</body>
+</html>
