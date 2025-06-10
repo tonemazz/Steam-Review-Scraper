@@ -26,29 +26,42 @@
 
     body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;background:#121212;color:#fff}
     #main-container{padding:20px}
+    #header{text-align:center;margin-bottom:30px}
+    #header h1{margin:0 0 10px 0;font-size:2.5em;color:#fff}
+    .instructions{margin:0 0 20px 0;font-size:1.1em;color:#bbb;max-width:600px;margin-left:auto;margin-right:auto}
     #search-bar{display:flex;gap:10px;margin-bottom:10px}
     #search-input{flex:1;padding:8px;border-radius:4px;border:1px solid #444;background:#1e1e1e;color:#fff}
-    #search-button{padding:8px 16px;border:none;border-radius:4px;background:#2a2a2a;color:#fff;cursor:pointer}
+    #search-button{padding:8px 16px;border:none;border-radius:4px;background:#2a2a2a;color:#fff;cursor:pointer;transition:background-color .2s}
+    #search-button:hover{background:#3a3a3a}
     #status-label{display:block;text-align:center;margin-bottom:10px;height:20px}
-    #games-grid{display:grid;grid-template-columns:repeat(auto-fill,170px);gap:20px;justify-content:center;background:#1e1e1e;padding:20px;border-radius:8px}
-    .game-tile{width:170px;height:275px;position:relative}
+    #games-grid{display:grid;grid-template-columns:repeat(auto-fill,170px);gap:20px;justify-content:center;background:#1e1e1e;padding:20px;border-radius:8px;position:relative}
+    #games-grid.empty::before{content:"Click on any game below to get started";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#666;font-size:1.2em;pointer-events:none}
+    .game-tile{width:170px;height:275px;position:relative;cursor:pointer}
+    .game-tile::after{content:"Click for options";position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#fff;text-align:center;padding:5px;font-size:0.8em;opacity:0;transition:opacity .2s}
+    .game-tile:hover::after{opacity:1}
     .game-container{width:150px;height:255px;margin:auto;display:flex;flex-direction:column;align-items:center}
-    .game-image{width:150px;height:225px;object-fit:cover;border:2px solid #333;border-radius:5px;background:#2a2a2a;transition:transform .2s,box-shadow .2s}
-    .game-image:hover{transform:scale(1.05);box-shadow:0 0 10px rgba(255,255,255,.5)}
+    .game-image{width:150px;height:225px;object-fit:cover;border:2px solid #333;border-radius:5px;background:#2a2a2a;transition:transform .2s,box-shadow .2s,border-color .2s}
+    .game-image:hover{transform:scale(1.05);box-shadow:0 0 10px rgba(255,255,255,.5);border-color:#555}
     .game-name{width:150px;height:40px;text-align:center;font-size:9pt;font-weight:bold;margin-top:5px;word-wrap:break-word}
     #progress-container{margin-top:10px;text-align:center}
     #progress-bar{width:100%;height:20px}
-    #context-menu{position:absolute;background:#2a2a2a;border:1px solid #333;border-radius:5px;display:none;z-index:1000}
-    #context-menu .menu-item{padding:8px 12px;cursor:pointer;color:#fff}
+    #context-menu{position:absolute;background:#2a2a2a;border:1px solid #333;border-radius:5px;display:none;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+    #context-menu .menu-item{padding:8px 12px;cursor:pointer;color:#fff;transition:background-color .2s}
     #context-menu .menu-item:hover{background:#333}
-    dialog{color:#fff;background:#1e1e1e;border:none;border-radius:8px;padding:20px}
+    dialog{color:#fff;background:#1e1e1e;border:none;border-radius:8px;padding:20px;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
     dialog::backdrop{background:rgba(0,0,0,.5)}
-    dialog button{margin:10px 5px 0 0;padding:6px 12px;border:none;border-radius:4px;background:#2a2a2a;color:#fff;cursor:pointer}
+    dialog button{margin:10px 5px 0 0;padding:6px 12px;border:none;border-radius:4px;background:#2a2a2a;color:#fff;cursor:pointer;transition:background-color .2s}
+    dialog button:hover{background:#3a3a3a}
     dialog input[type="range"],dialog input[type="number"]{width:100%;margin-top:10px}
+    .help-text{color:#888;font-size:0.9em;margin-top:5px}
   </style>
 </head>
 <body>
   <div id="main-container">
+    <div id="header">
+      <h1>Steam Review Scraper</h1>
+      <p class="instructions">Search for games or browse top games below. Click on any game to scrape reviews or visit its store page.</p>
+    </div>
     <div id="search-bar">
       <input id="search-input" placeholder="Search Steam or leave blank for top games">
       <button id="search-button">Search</button>
@@ -68,13 +81,16 @@
 
   <dialog id="count-dialog">
     <form method="dialog">
+      <h3>Review Scraper Settings</h3>
       <p>Select number of reviews to scrape: <span id="selected-count">500</span></p>
+      <div class="help-text">Reviews will be exported to an Excel file with text, ratings, playtime, and dates.</div>
       <!-- max is set dynamically in JS -->
       <input type="range" id="count-slider" min="1" max="1000" value="500">
       <input type="number" id="count-input" min="1" max="1000" value="500">
+      <div class="help-text">Scraping may take a few minutes for large amounts. Steam limits requests to prevent overload.</div>
       <menu>
         <button id="cancel-button" type="reset">Cancel</button>
-        <button id="ok-button" type="submit">OK</button>
+        <button id="ok-button" type="submit">Start Scraping</button>
       </menu>
     </form>
   </dialog>
@@ -126,6 +142,7 @@
     ----------------------------------------------------------- */
     function showGames(list) {
       gamesGrid.innerHTML = '';
+      gamesGrid.classList.remove('empty');
       if (!list.length) {
         gamesGrid.innerHTML = '<p style="color:#888;">No games to display.</p>';
         return;
@@ -135,6 +152,7 @@
         tile.className  = 'game-tile';
         tile.dataset.id = g.app_id;
         tile.dataset.name = g.name;
+        tile.title = `Click to scrape reviews for ${g.name} or visit store page`;
 
         const wrap   = document.createElement('div');
         wrap.className = 'game-container';
@@ -143,6 +161,9 @@
         img.className = 'game-image';
         img.src = g.image;
         img.alt = g.name;
+        img.onerror = () => {
+          img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTUwIiBoZWlnaHQ9IjIyNSIgdmlld0JveD0iMCAwIDE1MCAyMjUiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNTAiIGhlaWdodD0iMjI1IiBmaWxsPSIjMmEyYTJhIi8+Cjx0ZXh0IHg9Ijc1IiB5PSIxMTIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM2NjYiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiI+Tm8gSW1hZ2U8L3RleHQ+Cjwvc3ZnPg==';
+        };
 
         const label = document.createElement('div');
         label.className = 'game-name';
@@ -158,7 +179,7 @@
        4.  LOAD TOP GAMES  (Steam Spy ≈10 kB vs 9 MB applist)
     ----------------------------------------------------------- */
     async function loadInitialGames() {
-      statusLabel.textContent = 'Loading top games…';
+      statusLabel.innerHTML = 'Loading top games… <span id="spinner"></span>';
       try {
         const url  = 'https://api.allorigins.win/raw?url=' +
                      encodeURIComponent('https://steamspy.com/api.php?request=top100in2weeks');
@@ -171,10 +192,11 @@
           image  : imgUrl(g.appid)
         }));
         showGames(displayedGames);
-        statusLabel.textContent = '';
+        statusLabel.innerHTML = `Loaded ${displayedGames.length} popular games. Click any game to get started!`;
+        setTimeout(() => { statusLabel.textContent = ''; }, 4000);
       } catch (err) {
         console.error(err);
-        statusLabel.textContent = 'Failed to load top games.';
+        statusLabel.textContent = '⚠️ Failed to load top games. Check your internet connection and try refreshing.';
       }
     }
 
@@ -195,12 +217,16 @@
         }));
         displayedGames = results;
         showGames(results);
-        statusLabel.textContent = `Found ${results.length} result(s).`;
+        if (results.length > 0) {
+          statusLabel.textContent = `Found ${results.length} game(s) for "${term}". Click any game to scrape reviews!`;
+        } else {
+          statusLabel.textContent = `No games found for "${term}". Try a different search term.`;
+        }
       } catch (err) {
         console.error(err);
-        statusLabel.textContent = 'Search failed – try again.';
+        statusLabel.textContent = '⚠️ Search failed. Check your connection and try again.';
       } finally {
-        setTimeout(() => { statusLabel.textContent = ''; }, 3000);
+        setTimeout(() => { statusLabel.textContent = ''; }, 4000);
       }
     }
 
@@ -283,11 +309,13 @@
 
 
       if (!reviews.length) {
-        alert('No reviews returned – Steam might be rate-limiting. Try again later.');
+        statusLabel.textContent = '⚠️ No reviews found. Steam might be rate-limiting or the game has no reviews. Try again later.';
+        setTimeout(() => { statusLabel.textContent = ''; }, 5000);
         return;
       }
       generateExcelFile(reviews, app_id);
-      alert('Scraping complete! Excel file downloaded.');
+      statusLabel.textContent = '✅ Scraping complete! Excel file has been downloaded to your computer.';
+      setTimeout(() => { statusLabel.textContent = ''; }, 5000);
     }
 
     async function scrapeReviews(app_id, goal) {
